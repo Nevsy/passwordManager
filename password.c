@@ -6,42 +6,70 @@
 #include <stdint.h>
 #include <windows.h>
 #include <sys/stat.h> // Check if file extists
-#include <openssl/ssl.h>
+#include <getopt.h>
+
 #include "curses.h"
+// -L. -lpdcurses
 
+// constants
 #define MAX_NAME_LENGTH 256
-#define MAX_LINE_LENGTH 1025
+#define MAX_LINE_LENGTH 1024
 
-#define MAXNODES 2048
 #define MAXNAME 256
-#define MAX_PASSWORD_LENGTH 1024
+#define MAX_PASSWORD_LENGTH 1023 // 1024 - 1 for \0
 
+typedef struct Flags {
+    bool m; // add metadata / show metadata
+    bool metaDataAdd;
+    bool c; // copy to clipboard
+    bool h; // help
+    bool a; // add lines to metadata
+    bool r; // replace lines in metadata
+    char metadata[MAX_LINE_LENGTH];
+}Flags;
+
+struct Flags flags = {0, 0, 0, 0, 0, 0, ""};
+
+// main functions
 int showPassword(int argc, char *argv[]);
 int addPassword(int argc, char *argv[], int random);
+int editPassword(int argc, char *argv[]);
+int deletePassword(int argc, char *argv[]);
 
+// text/file manipulation
+int writeToFile(FILE *file, char *key);
+void deleteTextExceptFirstLine(char *filePath);
+size_t read_line(FILE *file, char **line, size_t *line_size);
+
+// helper functions
 char *randomPassword(int len);
+char *toLowerCase(char *str);
 void CopyToClipboard(const char* str);
+
+// CLA reader
+bool *checkFlags(int argc, char *argv[], Flags *flags);
 
 int main(int argc, char *argv[]) {
     // MARK: CLA
+    
     int addPasswordSuccess = 0;
     int showPasswordSuccess = 0;
-    if (argc > 1 && argc < 4) {
-        if (!strcasecmp(argv[1], "show")) {
+    int editPasswordSuccess = 0;
+    int deletePasswordSuccess = 0;
+    
+    if (argc > 1 && argc < 7) {
+        bool *arrayDo = checkFlags(argc, argv, &flags);
+
+        if (arrayDo[0]) {
             showPasswordSuccess = showPassword(argc, argv);
-        } else if (!strcasecmp(argv[1], "gen") || !strcasecmp(argv[1], "generate")) {
+        } else if (arrayDo[1]) {
             addPasswordSuccess = addPassword(argc, argv, 1);
-        } else if (!strcasecmp(argv[1], "add")) {
+        } else if (arrayDo[2]) {
             addPasswordSuccess = addPassword(argc, argv, 0);
-        } else if (!strcasecmp(argv[1], "-h") || !strcasecmp(argv[1], "--help")) {
-            printf("Choose an option:\n");
-            printf("--> password.exe show <name of service> (optional -a) \n\t--> show a password (and additional metadata)\n");
-            printf("--> password.exe add <name of the service> (metadata) \n\t--> add a password (and add metadata)\n");
-            printf("--> password.exe gen / generate <name of the service> (metadata) \n\t--> generate a password and add it (and add metadata)\n");
-            return 0;
-        } else {
-            printf("1st argument invalid\n");
-            return 0;
+        } else if (arrayDo[3]){
+            editPasswordSuccess = editPassword(argc, argv);
+        } else if (arrayDo[4]) {
+            deletePasswordSuccess = deletePassword(argc, argv);
         }
     } else {
         printf("1 Argument expected");
@@ -54,7 +82,153 @@ int main(int argc, char *argv[]) {
     if(showPasswordSuccess != 0) {
         printf("Error when showing password\n");
     }
+    if(editPasswordSuccess != 0){
+        printf("Error when editing password\n");
+    }
+    if(deletePasswordSuccess != 0){
+        printf("Error when deleting password\n");
+    }
     return 0;
+}
+
+// MARK: check flags
+bool *checkFlags(int argc, char *argv[], Flags *flags){
+    int argcCopy = argc;
+    char **argvCopy = malloc(argc * sizeof(char *));
+    for (int i = 0; i < argc; i++) {
+        argvCopy[i] = strdup(argv[i]);
+    }
+
+    int c;
+    static struct option long_options[] =
+    {
+        {"help", no_argument, 0, 'h'},
+        {0, 0, 0, 0}
+    };
+
+    bool isFirstArgShow = (argcCopy > 1 && strcasecmp(argvCopy[1], "show") == 0);
+    bool isFirstArgEdit = (argcCopy > 1 && strcasecmp(argvCopy[1], "edit") == 0);
+    bool isFirstArgGen = (argcCopy > 1 && strcasecmp(argvCopy[1], "gen") == 0 || strcasecmp(argvCopy[1], "generate") == 0);
+    bool isFirstArgAdd = (argcCopy > 1 && strcasecmp(argvCopy[1], "add") == 0);
+    bool isFirstArgDelete = (argcCopy > 1 && strcasecmp(argvCopy[1], "delete") == 0 || strcasecmp(argvCopy[1], "del") == 0);
+
+    bool *arrayDo = malloc(5 * sizeof(bool));
+
+    for (int i = 0; i < 5; i++) {
+        arrayDo[i] = false;
+    }
+
+    if(isFirstArgShow) arrayDo[0] = true;
+    if(isFirstArgGen) arrayDo[1] = true;
+    if(isFirstArgAdd) arrayDo[2] = true;
+    if(isFirstArgEdit) arrayDo[3] = true;
+    if(isFirstArgDelete) arrayDo[4] = true;
+
+    while ((c = getopt_long(argcCopy, argvCopy, "ciarm::h", long_options, NULL)) != -1) {
+        switch (c) {
+            case 'c':
+                if(!isFirstArgShow && !isFirstArgGen && !isFirstArgAdd) {
+                    printf("Found -c flag without the add or generate command\n");
+                    printf("Use: ./password add <name> [-c] [-m] <data in double quotes>");
+                    printf("Use: ./password gen | generate <name> [-c] [-m] <data in double quotes>");
+                    fflush(stdout);
+                    exit(1);
+                }
+                //printf("Found -c flag\n");
+                flags->c = true;
+                break;
+           case 'm':
+                if (optind < argcCopy && argvCopy[optind][0] != '-') {
+                    if(isFirstArgShow || isFirstArgDelete) {
+                        printf("Found -m flag with argument: %s\n", argvCopy[optind]);
+                        printf("Use: ./password show <name> [-m]");
+                        fflush(stdout);
+                        exit(1);
+                    }
+                    //printf("Found -m flag with argument: %s\n", argvCopy[optind]);
+                    strncpy(flags->metadata, argvCopy[optind], MAX_LINE_LENGTH);
+                    flags->metaDataAdd = true;
+                    optind++;
+                } else {
+                    if(!isFirstArgShow && !isFirstArgDelete) {
+                        printf("Found -m flag without argument\n");
+                        printf("Use: ./password show <name> [-m] <data in double quotes>");
+                        fflush(stdout);
+                        exit(1);
+                    }
+                    flags->metadata[0] = '\0';
+                }
+                flags->m = true;
+                break;
+            case 'h':
+                //printf("Found --help flag\n");
+                printf("Choose an option:\n");
+                printf("--> password.exe show <name> (optional -a) \n\t--> show a password (and additional metadata)\n");
+                printf("--> password.exe add <name> (metadata) \n\t--> add a password (and add metadata)\n");
+                printf("--> password.exe gen | generate <name> (metadata) \n\t--> generate a password and add it (and add metadata)\n");
+            
+                flags->h = true;
+                break;
+            case 'a':
+                if(!isFirstArgEdit) {
+                    printf("Found -a flag without the edit command\n");
+                    printf("Use: ./password edit <name> [-a | -r] <data in double quotes>");
+                    fflush(stdout);
+                    exit(1);
+                }
+
+                if (optind < argcCopy && argvCopy[optind][0] != '-') {
+                    //printf("Found -a flag with argument: %s\n", argvCopy[optind]);
+                    strncpy(flags->metadata, argvCopy[optind], MAX_LINE_LENGTH);
+                    flags->metaDataAdd = true;
+                    optind++;
+                } else {
+                    printf("Found -a flag without argument\n");
+                    printf("Use: ./password edit <file> [-a | -r] <data in double quotes>");
+                    fflush(stdout);
+                    exit(1);
+                    flags->metadata[0] = '\0';
+                }
+                
+                flags->a = true;
+                break;
+            case 'r':
+                if(!isFirstArgEdit) {
+                    printf("Found -r flag without the edit command\n");
+                    printf("Use: ./password edit <name> [-a | -r] <data in double quotes>");
+                    fflush(stdout);
+                    exit(1);
+                }
+
+                if (optind < argcCopy && argvCopy[optind][0] != '-') {
+                    //printf("Found -r flag with argument: %s\n", argvCopy[optind]);
+                    strncpy(flags->metadata, argvCopy[optind], MAX_LINE_LENGTH);
+                    flags->metaDataAdd = true;
+                    optind++;
+                } else {
+                    printf("Found -r flag without argument\n");
+                    printf("Use: ./password edit <name> [-a | -r] <data in double quotes>");
+                    fflush(stdout);
+                    exit(1);
+                    flags->metadata[0] = '\0';
+                }
+
+                flags->r = true;
+                break;
+            case '?':
+                printf("Unknown option: %c\n", optopt);
+                perror("Error when reading flags\n");
+                exit(EXIT_FAILURE);
+                break;
+        }
+    }
+
+    for (int i = 0; i < argcCopy; i++) {
+        free(argvCopy[i]);
+    }
+    free(argvCopy);
+
+    return arrayDo;
 }
 
 // MARK: Add
@@ -69,12 +243,13 @@ int addPassword(int argc, char *argv[], int random) {
         return 1;
     }
 
-    char argumentToLowerCase[MAXNAME];
-    for (int i = 0; i < strlen(argv[2]); i++) {
-        argumentToLowerCase[i] = tolower(argv[2][i]);
+    if(flags.m && !flags.metaDataAdd){
+        printf("Use: ./password <name> [-m] <data in double quotes>\n");
+        fflush(stdout);
+        return 1;
     }
-    argumentToLowerCase[strlen(argv[2])] = '\0';
 
+    char *argumentToLowerCase = toLowerCase(argv[2]);
     char filePath[MAXNAME];
     snprintf(filePath, MAXNAME, "./passwords/%s.txt", argumentToLowerCase);
 
@@ -92,15 +267,12 @@ int addPassword(int argc, char *argv[], int random) {
         srand((time_t)ts.tv_nsec);
         length = 20 + rand() % 10;  // length gets values between 20 and 30
         key = randomPassword(length);
-        
-        // TODO: Only copy password if -c if called
-        CopyToClipboard(key); // Copy password to clipboard
     } else { 
-        // MARK: User input
+        // MARK: ADD - Input
         initscr();
         addstr("Enter password: ");
         refresh();
-        // do not show user input in terminal
+        // Do not show user input in terminal
         noecho(); 
         int i = 0;
         int ch;
@@ -120,7 +292,8 @@ int addPassword(int argc, char *argv[], int random) {
         }
         confirmPassword[i] = '\0'; // Null-terminate the string
 
-        //addstr("Password entered: "); // Would be kinda nonsence outputting the password but it's possible
+        // Would be kinda nonsence outputting the password but it's possible
+        //addstr("Password entered: "); 
         //addstr(confirmPassword); // Display a confirmation message
         //refresh();
         //getch(); // Wait for a key press
@@ -136,11 +309,9 @@ int addPassword(int argc, char *argv[], int random) {
             printf("Password too long\n");
             return 1;
         }
-
-        printf("Password added successfully\n");
     }
 
-    // MARK: Write to file
+    // MARK: ADD - Write
     FILE *thisPasswordFile = fopen(filePath, "a+");
     if (thisPasswordFile == NULL) {
         printf("Error when opening file!\n");
@@ -148,7 +319,10 @@ int addPassword(int argc, char *argv[], int random) {
         exit(EXIT_FAILURE);
     }
 
-    fprintf(thisPasswordFile, "%s\n", key);
+    writeToFile(thisPasswordFile, key);
+
+    printf("Password added successfully\n");
+    fflush(stdout);
 
     free(key);
     fclose(thisPasswordFile);
@@ -158,17 +332,13 @@ int addPassword(int argc, char *argv[], int random) {
 // MARK: Show
 int showPassword(int argc, char *argv[]) {
     if (argc < 3) {
-        printf("Usage: %s show <filename>\n", argv[0]);
+        printf("Usage: %s show <name>\n", argv[0]);
+        fflush(stdout);
         return 1;
     }
 
-    char argumentToLowerCase[MAXNAME];
-    for (int i = 0; i < strlen(argv[2]); i++) {
-        argumentToLowerCase[i] = tolower(argv[2][i]);
-    }
-    argumentToLowerCase[strlen(argv[2])] = '\0';
-
     //Construct the search path
+    char *argumentToLowerCase = toLowerCase(argv[2]);
     char searchPath[MAX_NAME_LENGTH + 12];
     sprintf(searchPath, ".\\passwords\\%s.txt", argumentToLowerCase);
     // Search for the file
@@ -189,11 +359,119 @@ int showPassword(int argc, char *argv[]) {
             fclose(file);
             return 1;
         }
-        printf("%s", line);
+
+        if(flags.c){
+            CopyToClipboard(line);
+        }
+        else{
+            printf("%s", line);
+        }
+
+        if(flags.m){
+            while(fgets(line, MAX_LINE_LENGTH, file) != NULL){
+                printf("%s", line);
+            }
+        }
+
         fclose(file);
     }
 
     return 0;
+}
+
+// MARK: Edit
+int editPassword(int argc, char *argv[]){
+    char *argumentToLowerCase = toLowerCase(argv[2]);
+    char searchPath[MAX_NAME_LENGTH + 12];
+    sprintf(searchPath, ".\\passwords\\%s.txt", argumentToLowerCase);
+
+    struct stat st;
+    FILE *file;
+    if (stat(searchPath, &st) != 0) { // if file doesn't exist
+        fprintf(stderr, "File not found\n");
+        exit(EXIT_FAILURE);
+    }
+    
+    if (!flags.a && !flags.r) {
+        const char *command = "vim"; // or "vi"
+        char cmd[100];
+        snprintf(cmd, sizeof(cmd), "%s %s", command, searchPath);
+
+        // Call Vi/Vim using system()
+        if (system(cmd) == -1) {
+            perror("Error executing Vi/Vim");
+            return EXIT_FAILURE;
+        }
+    }
+    else {
+        file = fopen(searchPath, "a");
+        if (file == NULL) {
+            fprintf(stderr, "Error opening the file\n");
+            exit(EXIT_FAILURE);
+        }
+
+        if(flags.r){
+            deleteTextExceptFirstLine(searchPath);
+        }
+        else if(flags.a){
+            // do nothing
+        }
+
+        fprintf(file, "%s", flags.metadata);
+        fprintf(file, "%s", "\n");
+    }
+
+    
+
+    fclose(file);
+
+    printf("File '%s' edited successfully.\n", argv[2]);
+
+    return 0;
+}
+
+// MARK: Delete
+int deletePassword(int argc, char *argv[]) {
+    char *argumentToLowerCase = toLowerCase(argv[2]);
+    char searchPath[MAX_NAME_LENGTH + 12];
+    sprintf(searchPath, ".\\passwords\\%s.txt", argumentToLowerCase);
+
+    if(flags.m){
+        deleteTextExceptFirstLine(searchPath);
+
+        printf("Metadata of '%s' deleted successfully.\n", argv[2]);
+    }
+    else {
+        if (remove(searchPath) != 0) {
+            perror("Error deleting file");
+            return EXIT_FAILURE;
+        }
+
+        printf("File '%s' deleted successfully.\n", argv[2]);
+    }
+
+    return 0;
+}
+
+// MARK: Write
+int writeToFile(FILE *file, char *key){
+    // Check if -m flag is present AND metadata has been provided, already done in the flags function
+    if(flags.m){
+        fprintf(file, "%s\n", key);
+        fprintf(file, "%s\n", flags.metadata);
+    }
+    else {
+        fprintf(file, "%s\n", key);
+    }
+
+    // Copy password to clipboard
+    if(flags.c){
+        CopyToClipboard(key);
+    }
+    else{
+        printf("%s", key);
+        printf("\n");
+    }
 }
 
 // MARK: Random
@@ -226,9 +504,75 @@ char *randomPassword(int len) {
         sprintf(password + i, "%c", randomChar);
     }
 
-    printf("%s\n", password);
-    //CopyToClipboard(password); currently not copying to clipboard
     return password;
+}
+
+// MARK: Delete w/o 1st line
+void deleteTextExceptFirstLine(char *filename) {
+    FILE *file;
+    char *buffer = NULL;
+    size_t bufferSize = 0;
+    ssize_t bytesRead;
+    size_t firstLineEnd;
+
+    // Open the file in read mode
+    file = fopen(filename, "r");
+
+    if (file == NULL) {
+        fprintf(stderr, "Error opening file.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // Read the entire file into the buffer
+    bytesRead = read_line(file, &buffer, &bufferSize);
+
+    if (bytesRead == -1) {
+        fprintf(stderr, "Error reading file.\n");
+        fclose(file);
+        free(buffer);
+        exit(EXIT_FAILURE);
+    }
+
+    // Find the end of the first line
+    firstLineEnd = strcspn(buffer, "\n");
+
+    // Close the file
+    fclose(file);
+
+    // Open the file in write mode to truncate it
+    file = fopen(filename, "w");
+
+    if (file == NULL) {
+        fprintf(stderr, "Error opening file for writing.\n");
+        free(buffer);
+        exit(EXIT_FAILURE);
+    }
+
+    // Write the first line back to the file
+    fwrite(buffer, 1, firstLineEnd + 1, file);
+
+    // Close the file
+    fclose(file);
+
+    // Free the buffer
+    free(buffer);
+}
+
+// MARK: ToLowerCase
+char *toLowerCase(char *str) {
+    char *lowerCase = (char *)malloc(strlen(str) + 1);
+    if (lowerCase == NULL) {
+        printf("Memory allocation failed.\n");
+        fflush(stdout);
+        return NULL;
+    }
+
+    for (int i = 0; i < strlen(str); i++) {
+        lowerCase[i] = tolower(str[i]);
+    }
+    lowerCase[strlen(str)] = '\0';
+
+    return lowerCase;
 }
 
 // MARK: Copy Clip
@@ -243,4 +587,27 @@ void CopyToClipboard(const char* str) {
         SetClipboardData(CF_TEXT, hMem);
         CloseClipboard();
     }
+}
+
+// MARK: Read line
+size_t read_line(FILE *file, char **line, size_t *line_size) {
+    char buf[MAX_LINE_LENGTH];
+    size_t len = 0;
+
+    while (fgets(buf, sizeof(buf), file)) {
+        size_t new_len = len + strlen(buf);
+        *line = realloc(*line, new_len + 1);
+        if (*line == NULL) {
+            perror("realloc");
+            exit(EXIT_FAILURE);
+        }
+        memcpy(*line + len, buf, strlen(buf));
+        len = new_len;
+        if (buf[strlen(buf) - 1] == '\n') {
+            break;
+        }
+    }
+    (*line)[len] = '\0';
+    *line_size = len;
+    return len;
 }
