@@ -35,6 +35,7 @@ int showPassword(int argc, char *argv[]);
 int addPassword(int argc, char *argv[], int random);
 int editPassword(int argc, char *argv[]);
 int deletePassword(int argc, char *argv[]);
+int lsDir(int argc, char *argv[]);
 
 // text/file manipulation
 int writeToFile(FILE *file, char *key);
@@ -70,6 +71,8 @@ int main(int argc, char *argv[]) {
             editPasswordSuccess = editPassword(argc, argv);
         } else if (arrayDo[4]) {
             deletePasswordSuccess = deletePassword(argc, argv);
+        } else if (arrayDo[5]) {
+            lsDir(argc, argv);
         }
     } else {
         printf("1 Argument expected");
@@ -111,6 +114,7 @@ bool *checkFlags(int argc, char *argv[], Flags *flags){
     bool isFirstArgGen = (argcCopy > 1 && strcasecmp(argvCopy[1], "gen") == 0 || strcasecmp(argvCopy[1], "generate") == 0);
     bool isFirstArgAdd = (argcCopy > 1 && strcasecmp(argvCopy[1], "add") == 0);
     bool isFirstArgDelete = (argcCopy > 1 && strcasecmp(argvCopy[1], "delete") == 0 || strcasecmp(argvCopy[1], "del") == 0);
+    bool isFirstArgLs = (argcCopy > 1 && strcasecmp(argvCopy[1], "ls") == 0);
 
     bool *arrayDo = malloc(5 * sizeof(bool));
 
@@ -123,6 +127,7 @@ bool *checkFlags(int argc, char *argv[], Flags *flags){
     if(isFirstArgAdd) arrayDo[2] = true;
     if(isFirstArgEdit) arrayDo[3] = true;
     if(isFirstArgDelete) arrayDo[4] = true;
+    if(isFirstArgLs) arrayDo[5] = true;
 
     while ((c = getopt_long(argcCopy, argvCopy, "ciarm::h", long_options, NULL)) != -1) {
         switch (c) {
@@ -152,7 +157,7 @@ bool *checkFlags(int argc, char *argv[], Flags *flags){
                 } else {
                     if(!isFirstArgShow && !isFirstArgDelete) {
                         printf("Found -m flag without argument\n");
-                        printf("Use: ./password show <name> [-m] <data in double quotes>");
+                        printf("Use: ./password show <name> [-m] <metadata>");
                         fflush(stdout);
                         exit(1);
                     }
@@ -163,10 +168,14 @@ bool *checkFlags(int argc, char *argv[], Flags *flags){
             case 'h':
                 //printf("Found --help flag\n");
                 printf("Choose an option:\n");
-                printf("--> password.exe show <name> (optional -a) \n\t--> show a password (and additional metadata)\n");
-                printf("--> password.exe add <name> (metadata) \n\t--> add a password (and add metadata)\n");
-                printf("--> password.exe gen | generate <name> (metadata) \n\t--> generate a password and add it (and add metadata)\n");
-            
+                printf("--> password.exe show <name> [-m | -c] \n\t--> show a password (and metadata, copy to clipboard and don't show in terminal)\n");
+                printf("--> password.exe add <name> [-m] <metadata> [-c] \n\t--> add a password (and add metadata)\n");
+                printf("--> password.exe gen | generate <name> <metadata> \n\t--> generate a password and add it (and add metadata)\n");
+                printf("--> password.exe edit <name> [-a | -r] <metadata> \n\t--> edit a password (a: add inline, r: replace with, auto: open vim)\n");
+                printf("--> password.exe delete <name> [-m] \n\t--> delete a password, or only the metadata\n");
+                printf("--> password.exe ls \n\t--> list all passwords\n");
+                fflush(stdout);
+                exit(0);
                 flags->h = true;
                 break;
             case 'a':
@@ -340,7 +349,7 @@ int showPassword(int argc, char *argv[]) {
     //Construct the search path
     char *argumentToLowerCase = toLowerCase(argv[2]);
     char searchPath[MAX_NAME_LENGTH + 12];
-    sprintf(searchPath, ".\\passwords\\%s.txt", argumentToLowerCase);
+    sprintf(searchPath, "./passwords/%s.txt", argumentToLowerCase);
     // Search for the file
     struct stat st;
     if (stat(searchPath, &st) != 0) {
@@ -383,7 +392,7 @@ int showPassword(int argc, char *argv[]) {
 int editPassword(int argc, char *argv[]){
     char *argumentToLowerCase = toLowerCase(argv[2]);
     char searchPath[MAX_NAME_LENGTH + 12];
-    sprintf(searchPath, ".\\passwords\\%s.txt", argumentToLowerCase);
+    sprintf(searchPath, "./passwords/%s.txt", argumentToLowerCase);
 
     struct stat st;
     FILE *file;
@@ -434,7 +443,7 @@ int editPassword(int argc, char *argv[]){
 int deletePassword(int argc, char *argv[]) {
     char *argumentToLowerCase = toLowerCase(argv[2]);
     char searchPath[MAX_NAME_LENGTH + 12];
-    sprintf(searchPath, ".\\passwords\\%s.txt", argumentToLowerCase);
+    sprintf(searchPath, "./passwords/%s.txt", argumentToLowerCase);
 
     if(flags.m){
         deleteTextExceptFirstLine(searchPath);
@@ -451,6 +460,41 @@ int deletePassword(int argc, char *argv[]) {
     }
 
     return 0;
+}
+
+// MARK: List
+int lsDir(int argc, char *argv[]) {
+    {
+        // creating an isolated scope for dirent.h to not bloat
+        #include <dirent.h>
+
+        DIR *dir;
+        struct dirent *entry;
+
+        // Open the directory
+        dir = opendir("./passwords");
+        if (dir == NULL) {
+            perror("Error opening directory");
+            return EXIT_FAILURE;
+        }
+
+        // Traverse the directory
+        while ((entry = readdir(dir)) != NULL) {
+            if(entry->d_name[0] != '.'){
+                // removing the extension
+                char *dot = strchr(entry->d_name, '.');
+                if (dot != NULL) {
+                    *dot = '\0';
+                }
+                printf("%s\n", entry->d_name);
+            }
+        }
+
+        // Close the directory
+        closedir(dir);
+    } // dirent.h is no longer in scope here
+
+    return EXIT_SUCCESS;
 }
 
 // MARK: Write

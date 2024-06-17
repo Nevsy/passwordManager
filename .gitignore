@@ -54,3 +54,4 @@ dkms.conf
 # Extra
 *.json
 *.pem
+*.txt
