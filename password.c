@@ -42,10 +42,17 @@ int writeToFile(FILE *file, char *key);
 void deleteTextExceptFirstLine(char *filePath);
 size_t read_line(FILE *file, char **line, size_t *line_size);
 
+// Get file data
+char *findFile(int argc, char *argv[]);
+void create_directory(const char* path);
+char *getLocationOfExecution(void);
+int initPasswordDirectory(const char *passwordsFolder);
+
 // helper functions
 char *randomPassword(int len);
 char *toLowerCase(char *str);
 void CopyToClipboard(const char* str);
+
 
 // CLA reader
 bool *checkFlags(int argc, char *argv[], Flags *flags);
@@ -116,7 +123,7 @@ bool *checkFlags(int argc, char *argv[], Flags *flags){
     bool isFirstArgDelete = (argcCopy > 1 && strcasecmp(argvCopy[1], "delete") == 0 || strcasecmp(argvCopy[1], "del") == 0);
     bool isFirstArgLs = (argcCopy > 1 && strcasecmp(argvCopy[1], "ls") == 0);
 
-    bool *arrayDo = malloc(5 * sizeof(bool));
+    bool *arrayDo = malloc(6 * sizeof(bool));
 
     for (int i = 0; i < 5; i++) {
         arrayDo[i] = false;
@@ -654,4 +661,74 @@ size_t read_line(FILE *file, char **line, size_t *line_size) {
     (*line)[len] = '\0';
     *line_size = len;
     return len;
+}
+
+char *findFile(int argc, char *argv[]){
+    char *locationOfExecution = getLocationOfExecution();
+    if (locationOfExecution == NULL) {
+        perror("getLocationOfExecution");
+        exit(EXIT_FAILURE);
+    }
+
+    char passwordsFolder[MAX_PATH_LENGTH];
+    snprintf(passwordsFolder, sizeof(passwordsFolder), "%s\\passwords", locationOfExecution);
+    free(locationOfExecution);
+
+    // Check if directory exists
+    if (!initPasswordDirectory(passwordsFolder)) {
+        printf("No passwords directory was found, created one\n");
+        fflush(stdout);
+    }
+
+    // Construct the specific path to file
+    char *argumentToLowerCase = toLowerCase(argv[2]);
+    char searchPath[MAX_PATH_LENGTH];
+    snprintf(searchPath, sizeof(searchPath), "%s\\%s.txt", passwordsFolder, argumentToLowerCase);
+    free(argumentToLowerCase);
+
+    struct stat st;
+    if (stat(searchPath, &st) != 0) { // if file doesn't exist
+        fprintf(stderr, "File not found: %s\n", searchPath);
+        exit(EXIT_FAILURE);
+    }
+
+    return searchPath;
+
+    // Not returing file itself because modes of opening can differ
+    // FILE *file = fopen(searchPath, "r");
+    // if (file == NULL) {
+    //     perror("fopen");
+    //     exit(EXIT_FAILURE);
+    // }
+
+    // return file;
+}
+
+int initPasswordDirectory(const char *passwordsFolder) {
+    struct stat st;
+    if (stat(passwordsFolder, &st) == 0 && (st.st_mode & S_IFDIR)) {
+        printf("Folder already exists\n");
+        return 1;
+    } else {
+        create_directory(passwordsFolder);
+        return 0;
+    }
+}
+
+char *getLocationOfExecution(void) {
+    char executablePath[MAX_PATH_LENGTH];
+    GetModuleFileName(NULL, executablePath, sizeof(executablePath));
+    char *lastBackslash = strrchr(executablePath, '\\');
+    if (lastBackslash != NULL) {
+        *lastBackslash = '\0';
+    }
+    return strdup(executablePath);
+}
+
+void create_directory(const char* path) {
+    if (CreateDirectory(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS) {
+        printf("Directory created or already exists: %s\n", path);
+    } else {
+        printf("Error creating directory: %s\n", path);
+    }
 }
