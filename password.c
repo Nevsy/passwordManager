@@ -1,3 +1,20 @@
+/***************************************/
+/*          PASSWORD MANAGER           */
+/***************************************/
+
+/*
+* TODO:
+    - Grep
+    - General: Move all 'path' searching to functions
+    - Add: password strength indicator
+    - Gen: Cryptographically secure random number
+    - Gen: which characters
+    - ...
+    - Encryption?
+    - Speed dial?
+    - History?
+*/
+
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
@@ -6,9 +23,9 @@
 #include <stdint.h>
 #include <windows.h>
 #include <sys/stat.h> // Check if file extists
-#include <getopt.h>
+#include <getopt.h> // Command line arguments
 
-#include "curses.h"
+#include "curses.h" // Hidden input
 // -L. -lpdcurses
 
 // constants
@@ -69,6 +86,8 @@ int main(int argc, char *argv[]) {
         bool *arrayDo = checkFlags(argc, argv, &flags);
 
         if (arrayDo[0]) {
+            char *path = findFile(argc, argv);
+            printf("%s", path);
             showPasswordSuccess = showPassword(argc, argv);
         } else if (arrayDo[1]) {
             addPasswordSuccess = addPassword(argc, argv, 1);
@@ -278,9 +297,22 @@ int addPassword(int argc, char *argv[], int random) {
     char *key = (char *)malloc(MAX_PASSWORD_LENGTH * sizeof(char));
     if (random) {
         int length;
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        srand((time_t)ts.tv_nsec);
+        // struct timespec ts;
+        // clock_gettime(CLOCK_MONOTONIC, &ts);
+        // srand((time_t)ts.tv_nsec);
+        
+        LARGE_INTEGER frequency, counter;
+        if (!QueryPerformanceFrequency(&frequency)) {
+            printf("QueryPerformanceFrequency failed.\n");
+            exit(1);
+        }
+        if (!QueryPerformanceCounter(&counter)) {
+            printf("QueryPerformanceFrequency failed.\n");
+            exit(1);
+        }
+
+        // Use the high-resolution counter value as the seed for the random number generator
+        srand((unsigned int)(counter.QuadPart % UINT_MAX));
         length = 20 + rand() % 10;  // length gets values between 20 and 30
         key = randomPassword(length);
     } else { 
@@ -377,7 +409,12 @@ int showPassword(int argc, char *argv[]) {
         }
 
         if(flags.c){
-            CopyToClipboard(line);
+            if(!strncasecmp(line, "Google", 6)){
+                printf("Google");
+            }
+            else{
+                CopyToClipboard(line);
+            }
         }
         else{
             printf("%s", line);
@@ -436,8 +473,6 @@ int editPassword(int argc, char *argv[]){
         fprintf(file, "%s", flags.metadata);
         fprintf(file, "%s", "\n");
     }
-
-    
 
     fclose(file);
 
@@ -546,9 +581,31 @@ char *randomPassword(int len) {
     }
     password[0] = '\0';
 
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    srand(ts.tv_nsec);
+    // char *password = (char *)malloc((len + 1) * sizeof(char)); // Allocate memory for password
+    // if (password == NULL) {
+    //     printf("Memory allocation failed.\n");
+    //     return NULL;
+    // }
+    // password[0] = '\0';
+
+    // struct timespec ts;
+    // clock_gettime(CLOCK_REALTIME, &ts);
+    // srand(ts.tv_nsec);
+
+    LARGE_INTEGER frequency, counter;
+    if (!QueryPerformanceFrequency(&frequency)) {
+        printf("QueryPerformanceFrequency failed.\n");
+        free(password);
+        return NULL;
+    }
+    if (!QueryPerformanceCounter(&counter)) {
+        printf("QueryPerformanceCounter failed.\n");
+        free(password);
+        return NULL;
+    }
+
+    // Use the high-resolution counter value as the seed for the random number generator
+    srand((unsigned int)(counter.QuadPart % UINT_MAX));
 
     for (int i = 0; i < len; i++) {
         char randomChar = allChars[rand() % charsLen];
@@ -663,6 +720,7 @@ size_t read_line(FILE *file, char **line, size_t *line_size) {
     return len;
 }
 
+// MARK: Find File
 char *findFile(int argc, char *argv[]){
     char *locationOfExecution = getLocationOfExecution();
     if (locationOfExecution == NULL) {
@@ -670,7 +728,7 @@ char *findFile(int argc, char *argv[]){
         exit(EXIT_FAILURE);
     }
 
-    char passwordsFolder[MAX_PATH_LENGTH];
+    char passwordsFolder[MAX_PATH];
     snprintf(passwordsFolder, sizeof(passwordsFolder), "%s\\passwords", locationOfExecution);
     free(locationOfExecution);
 
@@ -682,28 +740,26 @@ char *findFile(int argc, char *argv[]){
 
     // Construct the specific path to file
     char *argumentToLowerCase = toLowerCase(argv[2]);
-    char searchPath[MAX_PATH_LENGTH];
-    snprintf(searchPath, sizeof(searchPath), "%s\\%s.txt", passwordsFolder, argumentToLowerCase);
+    char *searchPath = (char *)malloc(MAX_PATH);
+    //snprintf(searchPath, sizeof(searchPath), "%s\\%s.txt", passwordsFolder, argumentToLowerCase);
+    strncat(searchPath, passwordsFolder, MAX_PATH-100);
+    strcat(searchPath, "\\");
+    strncat(searchPath, argumentToLowerCase, 100);
+    strcat(searchPath, ".txt");
     free(argumentToLowerCase);
 
     struct stat st;
     if (stat(searchPath, &st) != 0) { // if file doesn't exist
         fprintf(stderr, "File not found: %s\n", searchPath);
+        fprintf(stderr, "arg: %s\n", argumentToLowerCase);
+        fprintf(stderr, "locationOfExe: %s\n", passwordsFolder);
         exit(EXIT_FAILURE);
     }
 
     return searchPath;
-
-    // Not returing file itself because modes of opening can differ
-    // FILE *file = fopen(searchPath, "r");
-    // if (file == NULL) {
-    //     perror("fopen");
-    //     exit(EXIT_FAILURE);
-    // }
-
-    // return file;
 }
 
+// MARK: init pwd dir
 int initPasswordDirectory(const char *passwordsFolder) {
     struct stat st;
     if (stat(passwordsFolder, &st) == 0 && (st.st_mode & S_IFDIR)) {
@@ -715,8 +771,9 @@ int initPasswordDirectory(const char *passwordsFolder) {
     }
 }
 
+// MARK: get loc of exe 
 char *getLocationOfExecution(void) {
-    char executablePath[MAX_PATH_LENGTH];
+    char executablePath[MAX_PATH];
     GetModuleFileName(NULL, executablePath, sizeof(executablePath));
     char *lastBackslash = strrchr(executablePath, '\\');
     if (lastBackslash != NULL) {
@@ -725,6 +782,7 @@ char *getLocationOfExecution(void) {
     return strdup(executablePath);
 }
 
+// MARK: Mkdir
 void create_directory(const char* path) {
     if (CreateDirectory(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS) {
         printf("Directory created or already exists: %s\n", path);
