@@ -8,7 +8,7 @@
     - General: Move all 'path' searching to functions
     - Add: password strength indicator
     - Gen: Cryptographically secure random number
-    - Gen: which characters
+    - Gen: Which characters
     - ...
     - Encryption?
     - Speed dial?
@@ -29,11 +29,8 @@
 // -L. -lpdcurses
 
 // constants
-#define MAX_NAME_LENGTH 256
-#define MAX_LINE_LENGTH 1024
-
-#define MAXNAME 256
-#define MAX_PASSWORD_LENGTH 1023 // 1024 - 1 for \0
+#define MAX_NAME_LENGTH 100
+#define MAX_LINE_LENGTH 1024 // -> Max password length will be MAX_LINE_LENGTH - 1
 
 typedef struct Flags {
     bool m; // add metadata / show metadata
@@ -67,7 +64,7 @@ int initPasswordDirectory(const char *passwordsFolder);
 
 // helper functions
 char *randomPassword(int len);
-char *toLowerCase(char *str);
+char *toLowerCase(const char *str);
 void CopyToClipboard(const char* str);
 
 
@@ -139,7 +136,7 @@ bool *checkFlags(int argc, char *argv[], Flags *flags){
     bool isFirstArgEdit = (argcCopy > 1 && strcasecmp(argvCopy[1], "edit") == 0);
     bool isFirstArgGen = (argcCopy > 1 && strcasecmp(argvCopy[1], "gen") == 0 || strcasecmp(argvCopy[1], "generate") == 0);
     bool isFirstArgAdd = (argcCopy > 1 && strcasecmp(argvCopy[1], "add") == 0);
-    bool isFirstArgDelete = (argcCopy > 1 && strcasecmp(argvCopy[1], "delete") == 0 || strcasecmp(argvCopy[1], "del") == 0);
+    bool isFirstArgDelete = (argcCopy > 1 && (strcasecmp(argvCopy[1], "delete") == 0 || strcasecmp(argvCopy[1], "del") == 0 || strcasecmp(argvCopy[1], "rm") == 0));
     bool isFirstArgLs = (argcCopy > 1 && strcasecmp(argvCopy[1], "ls") == 0);
 
     bool *arrayDo = malloc(6 * sizeof(bool));
@@ -285,8 +282,8 @@ int addPassword(int argc, char *argv[], int random) {
     }
 
     char *argumentToLowerCase = toLowerCase(argv[2]);
-    char filePath[MAXNAME];
-    snprintf(filePath, MAXNAME, "./passwords/%s.txt", argumentToLowerCase);
+    char filePath[MAX_PATH];
+    snprintf(filePath, MAX_PATH, "./passwords/%s.txt", argumentToLowerCase);
 
     struct stat st;
     if (stat(filePath, &st) == 0) {
@@ -294,7 +291,7 @@ int addPassword(int argc, char *argv[], int random) {
         return 1;
     }
 
-    char *key = (char *)malloc(MAX_PASSWORD_LENGTH * sizeof(char));
+    char *key = (char *)malloc(MAX_LINE_LENGTH - 1 * sizeof(char));
     if (random) {
         int length;
         // struct timespec ts;
@@ -324,18 +321,18 @@ int addPassword(int argc, char *argv[], int random) {
         noecho(); 
         int i = 0;
         int ch;
-        while ((ch = getch()) != '\n' && i < MAX_PASSWORD_LENGTH) {
+        while ((ch = getch()) != '\n' && i < (MAX_LINE_LENGTH - 1)) {
             key[i++] = ch;
         }
         key[i] = '\0'; // Null-terminate the string
 
         addstr("\n");
 
-        char *confirmPassword = (char *)malloc(MAX_PASSWORD_LENGTH * sizeof(char));
+        char *confirmPassword = (char *)malloc((MAX_LINE_LENGTH - 1) * sizeof(char));
         addstr("Confirm password: ");
         refresh();
         i = 0;
-        while ((ch = getch()) != '\n' && i < MAX_PASSWORD_LENGTH) {
+        while ((ch = getch()) != '\n' && i < (MAX_LINE_LENGTH - 1)) {
             confirmPassword[i++] = ch;
         }
         confirmPassword[i] = '\0'; // Null-terminate the string
@@ -347,13 +344,13 @@ int addPassword(int argc, char *argv[], int random) {
         //getch(); // Wait for a key press
         endwin(); // Clean up and exit ncurses
 
-        if(strncmp(confirmPassword, key, MAX_PASSWORD_LENGTH)) {
+        if(strncmp(confirmPassword, key, (MAX_LINE_LENGTH - 1))) {
             printf("Passwords do not match\n");
             return 1;
         }
 
         key[strcspn(key, "\n")] = 0;  // remove newline character
-        if (strlen(key) > MAX_PASSWORD_LENGTH) {
+        if (strlen(key) > (MAX_LINE_LENGTH - 1)) {
             printf("Password too long\n");
             return 1;
         }
@@ -466,9 +463,6 @@ int editPassword(int argc, char *argv[]){
         if(flags.r){
             deleteTextExceptFirstLine(searchPath);
         }
-        else if(flags.a){
-            // do nothing
-        }
 
         fprintf(file, "%s", flags.metadata);
         fprintf(file, "%s", "\n");
@@ -565,12 +559,14 @@ char *randomPassword(int len) {
     char characters[33] = "~`!@#$\%^&*()_-+={[}]|\\:;\"'<,>.?/";
     char majuscule[27] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     char miniscule[27] = "abcdefghijklmnopqrstuvwxyz";
+    char numbers[10] = "1234567890";
 
     char allChars[200];
     allChars[0] = '\0';
     strcat(allChars, characters);
     strcat(allChars, majuscule);
     strcat(allChars, miniscule);
+    strcat(allChars, numbers);
 
     int charsLen = strlen(allChars);
 
@@ -667,20 +663,23 @@ void deleteTextExceptFirstLine(char *filename) {
 }
 
 // MARK: ToLowerCase
-char *toLowerCase(char *str) {
-    char *lowerCase = (char *)malloc(strlen(str) + 1);
-    if (lowerCase == NULL) {
-        printf("Memory allocation failed.\n");
-        fflush(stdout);
-        return NULL;
-    }
+// char *toLowerCase(char *str) {
+//     char *lowerCase = strdup(str);
 
-    for (int i = 0; i < strlen(str); i++) {
-        lowerCase[i] = tolower(str[i]);
-    }
-    lowerCase[strlen(str)] = '\0';
+//     for (int i = 0; i < strlen(str); i++) {
+//         lowerCase[i] = tolower(str[i]);
+//     }
+//     lowerCase[strlen(str)] = '\0';
 
-    return lowerCase;
+//     return lowerCase;
+// }
+
+char *toLowerCase(const char *str) {
+    char *result = strdup(str);
+    for (int i = 0; result[i]; i++) {
+        result[i] = tolower((unsigned char)result[i]);
+    }
+    return result;
 }
 
 // MARK: Copy Clip
@@ -740,21 +739,24 @@ char *findFile(int argc, char *argv[]){
 
     // Construct the specific path to file
     char *argumentToLowerCase = toLowerCase(argv[2]);
-    char *searchPath = (char *)malloc(MAX_PATH);
-    //snprintf(searchPath, sizeof(searchPath), "%s\\%s.txt", passwordsFolder, argumentToLowerCase);
-    strncat(searchPath, passwordsFolder, MAX_PATH-100);
-    strcat(searchPath, "\\");
-    strncat(searchPath, argumentToLowerCase, 100);
-    strcat(searchPath, ".txt");
-    free(argumentToLowerCase);
+    char *searchPath = (char *)malloc(MAX_PATH * sizeof(char));
+
+    // Use snprintf to safely construct the path
+    if (snprintf(searchPath, MAX_PATH, "%s\\%s.txt", passwordsFolder, argumentToLowerCase) >= MAX_PATH) {
+        fprintf(stderr, "Path too long\n");
+        free(argumentToLowerCase);
+        free(searchPath);
+        exit(EXIT_FAILURE);
+    }
+
 
     struct stat st;
     if (stat(searchPath, &st) != 0) { // if file doesn't exist
-        fprintf(stderr, "File not found: %s\n", searchPath);
-        fprintf(stderr, "arg: %s\n", argumentToLowerCase);
-        fprintf(stderr, "locationOfExe: %s\n", passwordsFolder);
+        fprintf(stderr, "FILE NOT FOUND\n");
+        fprintf(stderr, "File location: %s\n", searchPath);
         exit(EXIT_FAILURE);
     }
+    free(argumentToLowerCase);
 
     return searchPath;
 }
@@ -763,9 +765,10 @@ char *findFile(int argc, char *argv[]){
 int initPasswordDirectory(const char *passwordsFolder) {
     struct stat st;
     if (stat(passwordsFolder, &st) == 0 && (st.st_mode & S_IFDIR)) {
-        printf("Folder already exists\n");
+        // Folder found
         return 1;
     } else {
+        // Folder not found -> create it
         create_directory(passwordsFolder);
         return 0;
     }

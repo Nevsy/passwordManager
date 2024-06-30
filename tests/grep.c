@@ -5,10 +5,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <ctype.h>
 
 #define MAX_LINE_LENGTH 1024
 
-char *toLowerCase(char *str);
+char *toLowerCase(const char *str);
 
 size_t read_line(FILE *file, char **line, size_t *line_size) {
     char buf[MAX_LINE_LENGTH];
@@ -36,43 +37,40 @@ size_t read_line(FILE *file, char **line, size_t *line_size) {
     return len;
 }
 
-void searchInFile(const char *filePath, const char *pattern, bool ignoreCase) {
+int searchInFile(const char *filePath, const char *pattern, bool ignoreCase) {
     FILE *file = fopen(filePath, "r");
     if (file == NULL) {
         perror("fopen failed");
-        return;
+        exit(EXIT_FAILURE);
     }
 
     char *line = NULL;
     size_t len = 0;
     int lineNumber = 0;
 
-    if (ignoreCase) {
-        while (read_line(file, &line, &len) > 0) {
-            char *line = toLowerCase(line);
-            printf("searching in line: %s\n", line);
-            lineNumber++;
-            if (strstr(line, pattern) != NULL) {
-                printf("%s - %d: %s", filePath, lineNumber, line);
-                fflush(stdout);
-            }
-        }
+    int totalInFile = 0;
 
-        free(line);
-        fclose(file);
-        return;
-    }
-    
     while (read_line(file, &line, &len) > 0) {
         lineNumber++;
-        if (strstr(line, pattern) != NULL) {
-            printf("%s - %d: %s", filePath, lineNumber, line);
+        char *searchLine = ignoreCase ? toLowerCase(line) : strdup(line);
+        char *searchPattern = ignoreCase ? toLowerCase(strdup(pattern)) : strdup(pattern);
+
+        if (strstr(searchLine, searchPattern) != NULL) {
+            printf("%s\n", filePath);
+            printf("%d: %s\n", lineNumber, line);
             fflush(stdout);
+
+            totalInFile++;
         }
+
+        free(searchLine);
+        free(searchPattern);
     }
 
     free(line);
     fclose(file);
+
+    return totalInFile;
 }
 
 void traverseDirectory(const char *basePath, const char *pattern, bool ignoreCase) {
@@ -84,61 +82,61 @@ void traverseDirectory(const char *basePath, const char *pattern, bool ignoreCas
         return;
     }
 
-    while ((dp = readdir(dir)) != NULL) {
-        char path[1024];
-        struct stat statbuf;
+    int totalMatches = 0;
 
-        // Skip "." and ".."
+    while ((dp = readdir(dir)) != NULL) {
         if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0)
             continue;
 
+        char path[1024];
         snprintf(path, sizeof(path), "%s/%s", basePath, dp->d_name);
+
+        struct stat statbuf;
         if (stat(path, &statbuf) == -1) {
             perror("stat failed");
             continue;
         }
 
         if (S_ISDIR(statbuf.st_mode)) {
-            //printf("Entering directory: %s\n", path); // Debug print
             traverseDirectory(path, pattern, ignoreCase);
         } else if (S_ISREG(statbuf.st_mode)) {
-            //printf("Searching file: %s\n", path); // Debug print
-            searchInFile(path, pattern, ignoreCase);
+            totalMatches += searchInFile(path, pattern, ignoreCase);
         }
     }
 
     closedir(dir);
+
+    printf("Found %d matches\n", totalMatches);
+    fflush(stdout);
 }
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
-        fprintf(stderr, "Usage: %s <directory> <pattern>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <pattern> <directory> [-i]\n", argv[0]);
         return EXIT_FAILURE;
     }
 
-    char *directory = argv[1];
-    char *pattern;
-    if(argc > 2 && strcasecmp(argv[3], "-i") == 0) {
-        pattern = toLowerCase(argv[2]);
-        traverseDirectory(directory, pattern, 1);
+    const char *pattern = argv[1];
+    const char *directory = argv[2];
+    bool ignoreCase = false;
+
+    if (argc > 3 && strcmp(argv[3], "-i") == 0) {
+        ignoreCase = true;
     }
-    else {
-        pattern = argv[2];
-        traverseDirectory(directory, pattern, 0);
-    }
-    printf("Searching for: %s in directory: %s\n", pattern, directory);
+
+    printf("Searching for: %s in directory: %s (Case %ssensitive)\n", 
+           pattern, directory, ignoreCase ? "in" : "");
     fflush(stdout);
-    
+
+    traverseDirectory(directory, pattern, ignoreCase);
 
     return EXIT_SUCCESS;
 }
 
-char *toLowerCase(char *str) {
-    int i;
-    for (i = 0; str[i] != '\0'; i++) {
-        if (str[i] >= 'A' && str[i] <= 'Z') {
-            str[i] = str[i] + 32;
-        }
+char *toLowerCase(const char *str) {
+    char *result = strdup(str);
+    for (int i = 0; result[i]; i++) {
+        result[i] = tolower((unsigned char)result[i]);
     }
-    return str;
+    return result;
 }
