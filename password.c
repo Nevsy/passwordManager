@@ -15,6 +15,7 @@
     - History?
 */
 
+#include <dirent.h> // Directory management
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
@@ -39,17 +40,18 @@ typedef struct Flags {
     bool h; // help
     bool a; // add lines to metadata
     bool r; // replace lines in metadata
+    bool i; // replace lines in metadata
     char metadata[MAX_LINE_LENGTH];
 }Flags;
 
-struct Flags flags = {0, 0, 0, 0, 0, 0, ""};
+struct Flags flags = {0, 0, 0, 0, 0, 0, 0, ""};
 
 // main functions
 int showPassword(int argc, char *argv[]);
 int addPassword(int argc, char *argv[], int random);
 int editPassword(int argc, char *argv[]);
 int deletePassword(int argc, char *argv[]);
-int lsDir(int argc, char *argv[]);
+int lsDir(const char *pathDir);
 
 // text/file manipulation
 int writeToFile(FILE *file, char *key);
@@ -61,15 +63,22 @@ char *findFile(int argc, char *argv[]);
 void create_directory(const char* path);
 char *getLocationOfExecution(void);
 int initPasswordDirectory(const char *passwordsFolder);
+char *findDir(void);
+char *constructFilePath(char *passwordsFolder, char *fileName);
+
+// grepping
+int grep(char *pattern, char *directory);
+int searchInFile(const char *filePath, const char *pattern, bool ignoreCase);
+void traverseDirectory(const char *basePath, const char *pattern, bool ignoreCase);
 
 // helper functions
 char *randomPassword(int len);
 char *toLowerCase(const char *str);
 void CopyToClipboard(const char* str);
 
-
 // CLA reader
-bool *checkFlags(int argc, char *argv[], Flags *flags);
+int checkFlags(int argc, char *argv[], Flags *flags);
+
 
 int main(int argc, char *argv[]) {
     // MARK: CLA
@@ -80,22 +89,42 @@ int main(int argc, char *argv[]) {
     int deletePasswordSuccess = 0;
     
     if (argc > 1 && argc < 7) {
-        bool *arrayDo = checkFlags(argc, argv, &flags);
+        int action = checkFlags(argc, argv, &flags);
 
-        if (arrayDo[0]) {
-            char *path = findFile(argc, argv);
-            printf("%s", path);
-            showPasswordSuccess = showPassword(argc, argv);
-        } else if (arrayDo[1]) {
-            addPasswordSuccess = addPassword(argc, argv, 1);
-        } else if (arrayDo[2]) {
-            addPasswordSuccess = addPassword(argc, argv, 0);
-        } else if (arrayDo[3]){
-            editPasswordSuccess = editPassword(argc, argv);
-        } else if (arrayDo[4]) {
-            deletePasswordSuccess = deletePassword(argc, argv);
-        } else if (arrayDo[5]) {
-            lsDir(argc, argv);
+        switch (action) {
+            case 1: {
+                showPasswordSuccess = showPassword(argc, argv);
+                break;
+            }
+            case 2:  {
+                addPasswordSuccess = addPassword(argc, argv, 1);
+                break;
+            }
+            case 3:  {
+                addPasswordSuccess = addPassword(argc, argv, 0);
+                break;
+            }
+            case 4: {
+                editPasswordSuccess = editPassword(argc, argv);
+                break;
+            }
+            case 5: {
+                deletePasswordSuccess = deletePassword(argc, argv);
+                break;
+            }
+            case 6: {
+                lsDir(findDir());
+                break;
+            }
+            case 7: {
+                if(argc < 3) {
+                    printf("Usage: %s grep <pattern> <directory>\n", argv[0]);
+                }
+
+                char *pattern = argv[2];
+                grep(pattern, findDir());
+                break;
+            }
         }
     } else {
         printf("1 Argument expected");
@@ -118,7 +147,7 @@ int main(int argc, char *argv[]) {
 }
 
 // MARK: check flags
-bool *checkFlags(int argc, char *argv[], Flags *flags){
+int checkFlags(int argc, char *argv[], Flags *flags){
     int argcCopy = argc;
     char **argvCopy = malloc(argc * sizeof(char *));
     for (int i = 0; i < argc; i++) {
@@ -138,19 +167,17 @@ bool *checkFlags(int argc, char *argv[], Flags *flags){
     bool isFirstArgAdd = (argcCopy > 1 && strcasecmp(argvCopy[1], "add") == 0);
     bool isFirstArgDelete = (argcCopy > 1 && (strcasecmp(argvCopy[1], "delete") == 0 || strcasecmp(argvCopy[1], "del") == 0 || strcasecmp(argvCopy[1], "rm") == 0));
     bool isFirstArgLs = (argcCopy > 1 && strcasecmp(argvCopy[1], "ls") == 0);
+    bool isFirstArgGrep = (argcCopy > 1 && strcasecmp(argvCopy[1], "grep") == 0);
 
-    bool *arrayDo = malloc(6 * sizeof(bool));
+    int action = 0;
 
-    for (int i = 0; i < 5; i++) {
-        arrayDo[i] = false;
-    }
-
-    if(isFirstArgShow) arrayDo[0] = true;
-    if(isFirstArgGen) arrayDo[1] = true;
-    if(isFirstArgAdd) arrayDo[2] = true;
-    if(isFirstArgEdit) arrayDo[3] = true;
-    if(isFirstArgDelete) arrayDo[4] = true;
-    if(isFirstArgLs) arrayDo[5] = true;
+    if(isFirstArgShow) action = 1;
+    if(isFirstArgGen) action = 2;
+    if(isFirstArgAdd) action = 3;
+    if(isFirstArgEdit) action = 4;
+    if(isFirstArgDelete) action = 5;
+    if(isFirstArgLs) action = 6;
+    if(isFirstArgGrep) action = 7;
 
     while ((c = getopt_long(argcCopy, argvCopy, "ciarm::h", long_options, NULL)) != -1) {
         switch (c) {
@@ -247,6 +274,16 @@ bool *checkFlags(int argc, char *argv[], Flags *flags){
 
                 flags->r = true;
                 break;
+
+            case 'i':
+                if(!isFirstArgGrep) {
+                    printf("Found -i flag without the grep command\n");
+                    printf("Use: ./password edit <name> [-a | -r] <data in double quotes>");
+                    fflush(stdout);
+                    exit(1);
+                }
+                flags->i = true;
+                break;
             case '?':
                 printf("Unknown option: %c\n", optopt);
                 perror("Error when reading flags\n");
@@ -260,7 +297,7 @@ bool *checkFlags(int argc, char *argv[], Flags *flags){
     }
     free(argvCopy);
 
-    return arrayDo;
+    return action;
 }
 
 // MARK: Add
@@ -386,6 +423,7 @@ int showPassword(int argc, char *argv[]) {
     char *argumentToLowerCase = toLowerCase(argv[2]);
     char searchPath[MAX_NAME_LENGTH + 12];
     sprintf(searchPath, "./passwords/%s.txt", argumentToLowerCase);
+    
     // Search for the file
     struct stat st;
     if (stat(searchPath, &st) != 0) {
@@ -499,38 +537,127 @@ int deletePassword(int argc, char *argv[]) {
 }
 
 // MARK: List
-int lsDir(int argc, char *argv[]) {
-    {
-        // creating an isolated scope for dirent.h to not bloat
-        #include <dirent.h>
+int lsDir(const char *pathDir) {
+    DIR *dir;
+    struct dirent *entry;
 
-        DIR *dir;
-        struct dirent *entry;
+    // Open the directory
+    dir = opendir(pathDir);
+    if (dir == NULL) {
+        perror("Error opening directory");
+        return EXIT_FAILURE;
+    }
 
-        // Open the directory
-        dir = opendir("./passwords");
-        if (dir == NULL) {
-            perror("Error opening directory");
-            return EXIT_FAILURE;
-        }
-
-        // Traverse the directory
-        while ((entry = readdir(dir)) != NULL) {
-            if(entry->d_name[0] != '.'){
-                // removing the extension
-                char *dot = strchr(entry->d_name, '.');
-                if (dot != NULL) {
-                    *dot = '\0';
-                }
-                printf("%s\n", entry->d_name);
+    // Traverse the directory
+    while ((entry = readdir(dir)) != NULL) {
+        if(entry->d_name[0] != '.'){
+            // removing the extension
+            char *dot = strchr(entry->d_name, '.');
+            if (dot != NULL) {
+                *dot = '\0';
             }
+            printf("%s\n", entry->d_name);
         }
+    }
 
-        // Close the directory
-        closedir(dir);
-    } // dirent.h is no longer in scope here
+    // Close the directory
+    closedir(dir);
 
     return EXIT_SUCCESS;
+}
+
+// MARK: Grep
+int grep(char *pattern, char *directory) {
+    printf("Searching for: '%s' in directory: %s (Case %ssensitive)\n", 
+           pattern, directory, flags.i ? "in" : "");
+    fflush(stdout);
+
+    traverseDirectory(directory, pattern, flags.i);
+
+    return EXIT_SUCCESS;
+}
+
+// MARK: traverse directory
+void traverseDirectory(const char *basePath, const char *pattern, bool ignoreCase) {
+    struct dirent *dp;
+    DIR *dir = opendir(basePath);
+
+    if (!dir) {
+        perror("opendir failed");
+        return;
+    }
+
+    int totalMatches = 0;
+
+    while ((dp = readdir(dir)) != NULL) {
+        if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0)
+            continue;
+
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s", basePath, dp->d_name);
+
+        struct stat statbuf;
+        if (stat(path, &statbuf) == -1) {
+            perror("stat failed");
+            continue;
+        }
+
+        if (S_ISDIR(statbuf.st_mode)) {
+            traverseDirectory(path, pattern, ignoreCase);
+        } else if (S_ISREG(statbuf.st_mode)) {
+            totalMatches += searchInFile(path, pattern, ignoreCase);
+        }
+    }
+
+    closedir(dir);
+
+    if(totalMatches == 0) {
+        printf("No matches found\n");
+    }
+    else if(totalMatches == 1) {
+        printf("Found 1 match\n");
+    }
+    else{
+        printf("Found %d matches\n", totalMatches);
+    }
+    fflush(stdout);
+}
+
+// MARK: Search in file
+int searchInFile(const char *filePath, const char *pattern, bool ignoreCase) {
+    FILE *file = fopen(filePath, "r");
+    if (file == NULL) {
+        perror("fopen failed");
+        exit(EXIT_FAILURE);
+    }
+
+    char *line = NULL;
+    size_t len = 0;
+    int lineNumber = 0;
+
+    int totalInFile = 0;
+
+    while (read_line(file, &line, &len) > 0) {
+        lineNumber++;
+        char *searchLine = ignoreCase ? toLowerCase(line) : strdup(line);
+        char *searchPattern = ignoreCase ? toLowerCase(strdup(pattern)) : strdup(pattern);
+
+        if (strstr(searchLine, searchPattern) != NULL) {
+            printf("%s\n", filePath);
+            printf("%d: %s\n", lineNumber, line);
+            fflush(stdout);
+
+            totalInFile++;
+        }
+
+        free(searchLine);
+        free(searchPattern);
+    }
+
+    free(line);
+    fclose(file);
+
+    return totalInFile;
 }
 
 // MARK: Write
@@ -663,17 +790,6 @@ void deleteTextExceptFirstLine(char *filename) {
 }
 
 // MARK: ToLowerCase
-// char *toLowerCase(char *str) {
-//     char *lowerCase = strdup(str);
-
-//     for (int i = 0; i < strlen(str); i++) {
-//         lowerCase[i] = tolower(str[i]);
-//     }
-//     lowerCase[strlen(str)] = '\0';
-
-//     return lowerCase;
-// }
-
 char *toLowerCase(const char *str) {
     char *result = strdup(str);
     for (int i = 0; result[i]; i++) {
@@ -702,30 +818,35 @@ size_t read_line(FILE *file, char **line, size_t *line_size) {
     size_t len = 0;
 
     while (fgets(buf, sizeof(buf), file)) {
-        size_t new_len = len + strlen(buf);
+        size_t buf_len = strlen(buf);
+        size_t new_len = len + buf_len;
         *line = realloc(*line, new_len + 1);
         if (*line == NULL) {
             perror("realloc");
             exit(EXIT_FAILURE);
         }
-        memcpy(*line + len, buf, strlen(buf));
+        memcpy(*line + len, buf, buf_len);
         len = new_len;
-        if (buf[strlen(buf) - 1] == '\n') {
+        if (buf[buf_len - 1] == '\n') {
             break;
         }
+    }
+    if (len == 0 && feof(file)) {
+        return 0;
     }
     (*line)[len] = '\0';
     *line_size = len;
     return len;
 }
 
-// MARK: Find File
-char *findFile(int argc, char *argv[]){
+// MARK: Find dir
+char *findDir(void) {
     char *locationOfExecution = getLocationOfExecution();
     if (locationOfExecution == NULL) {
         perror("getLocationOfExecution");
         exit(EXIT_FAILURE);
     }
+    printf("Executable path: %s\n", locationOfExecution);
 
     char passwordsFolder[MAX_PATH];
     snprintf(passwordsFolder, sizeof(passwordsFolder), "%s\\passwords", locationOfExecution);
@@ -737,19 +858,37 @@ char *findFile(int argc, char *argv[]){
         fflush(stdout);
     }
 
-    // Construct the specific path to file
-    char *argumentToLowerCase = toLowerCase(argv[2]);
-    char *searchPath = (char *)malloc(MAX_PATH * sizeof(char));
+    printf("Password directory: %s\n", passwordsFolder);
 
+    return strdup(passwordsFolder);
+}
+
+// MARK: Construct file path
+char *constructFilePath(char *passwordsFolder, char *fileName) {
+    char *searchPath = (char *)malloc(MAX_PATH * sizeof(char));
     // Use snprintf to safely construct the path
-    if (snprintf(searchPath, MAX_PATH, "%s\\%s.txt", passwordsFolder, argumentToLowerCase) >= MAX_PATH) {
+    if (snprintf(searchPath, MAX_PATH, "%s\\%s.txt", passwordsFolder, fileName) >= MAX_PATH) {
         fprintf(stderr, "Path too long\n");
-        free(argumentToLowerCase);
         free(searchPath);
         exit(EXIT_FAILURE);
     }
 
+    return searchPath;
+}
 
+// MARK: Find File
+char *findFile(int argc, char *argv[]){
+    char *passwordsFolder = findDir();
+    if (passwordsFolder == NULL) {
+        perror("findDir");
+        exit(EXIT_FAILURE);
+    }
+
+    // Construct the specific path to file
+    char *argumentToLowerCase = toLowerCase(argv[2]);
+    char *searchPath = constructFilePath(passwordsFolder, argumentToLowerCase);
+
+    // check if file exists
     struct stat st;
     if (stat(searchPath, &st) != 0) { // if file doesn't exist
         fprintf(stderr, "FILE NOT FOUND\n");
@@ -782,6 +921,7 @@ char *getLocationOfExecution(void) {
     if (lastBackslash != NULL) {
         *lastBackslash = '\0';
     }
+
     return strdup(executablePath);
 }
 
