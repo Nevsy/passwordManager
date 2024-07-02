@@ -4,11 +4,10 @@
 
 /*
 * TODO:
-    - Grep
-    - General: Move all 'path' searching to functions
+    - Gen: Which characters
+    - ...
     - Add: password strength indicator
     - Gen: Cryptographically secure random number
-    - Gen: Which characters
     - ...
     - Encryption?
     - Speed dial?
@@ -32,6 +31,7 @@
 // constants
 #define MAX_NAME_LENGTH 100
 #define MAX_LINE_LENGTH 1024 // -> Max password length will be MAX_LINE_LENGTH - 1
+#define INT_LENGTH 10
 
 typedef struct Flags {
     bool m; // add metadata / show metadata
@@ -42,15 +42,27 @@ typedef struct Flags {
     bool r; // replace lines in metadata
     bool i; // replace lines in metadata
     char metadata[MAX_LINE_LENGTH];
+    int genLength;
 }Flags;
 
-struct Flags flags = {0, 0, 0, 0, 0, 0, 0, ""};
+struct Flags flags = {0, 0, 0, 0, 0, 0, 0, "", 0};
+
+typedef enum actionType {
+    UNDEF,
+    SHOW,
+    ADD,
+    GEN,
+    EDIT,
+    RM,
+    LS,
+    GREP
+} actionType;
 
 // main functions
-int showPassword(int argc, char *argv[]);
-int addPassword(int argc, char *argv[], int random);
-int editPassword(int argc, char *argv[]);
-int deletePassword(int argc, char *argv[]);
+int showPassword(char *path);
+int addPassword(char *filePath, int random);
+int editPassword(char *filePath, char *argumentToLowerCase);
+int deletePassword(char *filePath, char *argumentToLowerCase);
 int lsDir(const char *pathDir);
 
 // text/file manipulation
@@ -59,7 +71,7 @@ void deleteTextExceptFirstLine(char *filePath);
 size_t read_line(FILE *file, char **line, size_t *line_size);
 
 // Get file data
-char *findFile(int argc, char *argv[]);
+char *findFile(int argc, char *argv[], bool checkIfExists);
 void create_directory(const char* path);
 char *getLocationOfExecution(void);
 int initPasswordDirectory(const char *passwordsFolder);
@@ -77,52 +89,70 @@ char *toLowerCase(const char *str);
 void CopyToClipboard(const char* str);
 
 // CLA reader
-int checkFlags(int argc, char *argv[], Flags *flags);
+actionType checkFlags(int argc, char *argv[], Flags *flags);
 
 
+// MARK: MAIN
 int main(int argc, char *argv[]) {
-    // MARK: CLA
-    
     int addPasswordSuccess = 0;
     int showPasswordSuccess = 0;
     int editPasswordSuccess = 0;
     int deletePasswordSuccess = 0;
     
     if (argc > 1 && argc < 7) {
-        int action = checkFlags(argc, argv, &flags);
+        actionType action = checkFlags(argc, argv, &flags);
+
+        char *fileSecondArg;
+        char *directory;
+        char *argumentToLowerCase;
+        if(action == SHOW || action == EDIT || action == RM) {
+            argumentToLowerCase = toLowerCase(argv[2]);
+            fileSecondArg = findFile(argc, argv, true);
+        }
+        else if (action == ADD || action == GEN){
+            fileSecondArg = findFile(argc, argv, false);
+        }
+        else if(action == GREP || action == LS) {
+            directory = findDir();
+        }
+        else if(action == UNDEF) {
+            fprintf(stderr, "No function defined");
+            exit(1);
+        }
+
 
         switch (action) {
-            case 1: {
-                showPasswordSuccess = showPassword(argc, argv);
+            case SHOW: {
+                showPasswordSuccess = showPassword(fileSecondArg);
                 break;
             }
-            case 2:  {
-                addPasswordSuccess = addPassword(argc, argv, 1);
+            case ADD:  {
+                addPasswordSuccess = addPassword(fileSecondArg, 0);
                 break;
             }
-            case 3:  {
-                addPasswordSuccess = addPassword(argc, argv, 0);
+            case GEN:  {
+                addPasswordSuccess = addPassword(fileSecondArg, 1);
                 break;
             }
-            case 4: {
-                editPasswordSuccess = editPassword(argc, argv);
+            case EDIT: {
+                editPasswordSuccess = editPassword(fileSecondArg, argumentToLowerCase);
                 break;
             }
-            case 5: {
-                deletePasswordSuccess = deletePassword(argc, argv);
+            case RM: {
+                deletePasswordSuccess = deletePassword(fileSecondArg, argumentToLowerCase);
                 break;
             }
-            case 6: {
-                lsDir(findDir());
+            case LS: {
+                lsDir(directory);
                 break;
             }
-            case 7: {
+            case GREP: {
                 if(argc < 3) {
-                    printf("Usage: %s grep <pattern> <directory>\n", argv[0]);
+                    printf("Usage: %s grep <pattern> [-i | case insensitive]\n", argv[0]);
                 }
 
                 char *pattern = argv[2];
-                grep(pattern, findDir());
+                grep(pattern, directory);
                 break;
             }
         }
@@ -147,7 +177,7 @@ int main(int argc, char *argv[]) {
 }
 
 // MARK: check flags
-int checkFlags(int argc, char *argv[], Flags *flags){
+actionType checkFlags(int argc, char *argv[], Flags *flags){
     int argcCopy = argc;
     char **argvCopy = malloc(argc * sizeof(char *));
     for (int i = 0; i < argc; i++) {
@@ -161,42 +191,40 @@ int checkFlags(int argc, char *argv[], Flags *flags){
         {0, 0, 0, 0}
     };
 
-    bool isFirstArgShow = (argcCopy > 1 && strcasecmp(argvCopy[1], "show") == 0);
-    bool isFirstArgEdit = (argcCopy > 1 && strcasecmp(argvCopy[1], "edit") == 0);
-    bool isFirstArgGen = (argcCopy > 1 && strcasecmp(argvCopy[1], "gen") == 0 || strcasecmp(argvCopy[1], "generate") == 0);
-    bool isFirstArgAdd = (argcCopy > 1 && strcasecmp(argvCopy[1], "add") == 0);
-    bool isFirstArgDelete = (argcCopy > 1 && (strcasecmp(argvCopy[1], "delete") == 0 || strcasecmp(argvCopy[1], "del") == 0 || strcasecmp(argvCopy[1], "rm") == 0));
-    bool isFirstArgLs = (argcCopy > 1 && strcasecmp(argvCopy[1], "ls") == 0);
-    bool isFirstArgGrep = (argcCopy > 1 && strcasecmp(argvCopy[1], "grep") == 0);
+    actionType action = UNDEF;
+    if(argcCopy > 1){
+        if((strcasecmp(argvCopy[1], "show") == 0)) action = SHOW;
+        else if(strcasecmp(argvCopy[1], "edit") == 0) action = EDIT;
+        else if(strcasecmp(argvCopy[1], "add") == 0) action = ADD;
+        else if(strcasecmp(argvCopy[1], "delete") == 0 || strcasecmp(argvCopy[1], "del") == 0 || strcasecmp(argvCopy[1], "rm") == 0) action = RM;
+        else if(strcasecmp(argvCopy[1], "ls") == 0) action = LS;
+        else if(strcasecmp(argvCopy[1], "gen") == 0 || strcasecmp(argvCopy[1], "generate") == 0) action = GEN;
+        else if(strcasecmp(argvCopy[1], "grep") == 0) action = GREP;
+    }
+    else {
+        fprintf(stderr, "Expected 1 argument, see 'pass -h' for help");
+        exit(1);
+    }
 
-    int action = 0;
-
-    if(isFirstArgShow) action = 1;
-    if(isFirstArgGen) action = 2;
-    if(isFirstArgAdd) action = 3;
-    if(isFirstArgEdit) action = 4;
-    if(isFirstArgDelete) action = 5;
-    if(isFirstArgLs) action = 6;
-    if(isFirstArgGrep) action = 7;
-
-    while ((c = getopt_long(argcCopy, argvCopy, "ciarm::h", long_options, NULL)) != -1) {
+    while ((c = getopt_long(argcCopy, argvCopy, "ciarlm::h", long_options, NULL)) != -1) {
         switch (c) {
             case 'c':
-                if(!isFirstArgShow && !isFirstArgGen && !isFirstArgAdd) {
-                    printf("Found -c flag without the add or generate command\n");
-                    printf("Use: ./password add <name> [-c] [-m] <data in double quotes>");
-                    printf("Use: ./password gen | generate <name> [-c] [-m] <data in double quotes>");
+                if(!(action == ADD || action == GEN || action == SHOW)) {
+                    printf("Found -c flag without the add, generate or show command\n");
+                    printf("Use: pass add <name> [-c] [-m] <data in double quotes>");
+                    printf("Use: pass gen | generate <name> [-c] [-m] <data in double quotes>");
+                    printf("--> password.exe show <name> [-m | -c] \n\t--> show a password (and metadata, copy to clipboard and don't show in terminal)\n");
                     fflush(stdout);
-                    exit(1);
+                    exit(0);
                 }
                 //printf("Found -c flag\n");
                 flags->c = true;
                 break;
            case 'm':
                 if (optind < argcCopy && argvCopy[optind][0] != '-') {
-                    if(isFirstArgShow || isFirstArgDelete) {
+                    if(action == SHOW || action == RM) {
                         printf("Found -m flag with argument: %s\n", argvCopy[optind]);
-                        printf("Use: ./password show <name> [-m]");
+                        printf("Use: pass show <name> [-m]");
                         fflush(stdout);
                         exit(1);
                     }
@@ -205,9 +233,9 @@ int checkFlags(int argc, char *argv[], Flags *flags){
                     flags->metaDataAdd = true;
                     optind++;
                 } else {
-                    if(!isFirstArgShow && !isFirstArgDelete) {
+                    if(!(action == SHOW || action == RM)) {
                         printf("Found -m flag without argument\n");
-                        printf("Use: ./password show <name> [-m] <metadata>");
+                        printf("Use: pass show <name> [-m] <metadata>");
                         fflush(stdout);
                         exit(1);
                     }
@@ -220,18 +248,19 @@ int checkFlags(int argc, char *argv[], Flags *flags){
                 printf("Choose an option:\n");
                 printf("--> password.exe show <name> [-m | -c] \n\t--> show a password (and metadata, copy to clipboard and don't show in terminal)\n");
                 printf("--> password.exe add <name> [-m] <metadata> [-c] \n\t--> add a password (and add metadata)\n");
-                printf("--> password.exe gen | generate <name> <metadata> \n\t--> generate a password and add it (and add metadata)\n");
+                printf("--> password.exe gen | generate <name> [-m] <metadata> [-c] -l <length> -dsmM \n\t--> generate a password and add it (and add metadata, specify length, specify which types of characters: d - digits, s - special characters, m - miniscules, M - majuscules)\n");
                 printf("--> password.exe edit <name> [-a | -r] <metadata> \n\t--> edit a password (a: add inline, r: replace with, auto: open vim)\n");
                 printf("--> password.exe delete <name> [-m] \n\t--> delete a password, or only the metadata\n");
                 printf("--> password.exe ls \n\t--> list all passwords\n");
+                printf("--> password.exe grep <pattern> [-i] \n\t--> list all passwords\n");
                 fflush(stdout);
                 exit(0);
                 flags->h = true;
                 break;
             case 'a':
-                if(!isFirstArgEdit) {
+                if(action != EDIT) {
                     printf("Found -a flag without the edit command\n");
-                    printf("Use: ./password edit <name> [-a | -r] <data in double quotes>");
+                    printf("Use: pass edit <name> [-a | -r] <data in double quotes>");
                     fflush(stdout);
                     exit(1);
                 }
@@ -243,7 +272,7 @@ int checkFlags(int argc, char *argv[], Flags *flags){
                     optind++;
                 } else {
                     printf("Found -a flag without argument\n");
-                    printf("Use: ./password edit <file> [-a | -r] <data in double quotes>");
+                    printf("Use: pass edit <file> [-a | -r] <data in double quotes>");
                     fflush(stdout);
                     exit(1);
                     flags->metadata[0] = '\0';
@@ -252,21 +281,21 @@ int checkFlags(int argc, char *argv[], Flags *flags){
                 flags->a = true;
                 break;
             case 'r':
-                if(!isFirstArgEdit) {
+                if(action != EDIT) {
                     printf("Found -r flag without the edit command\n");
-                    printf("Use: ./password edit <name> [-a | -r] <data in double quotes>");
+                    printf("Use: pass edit <name> [-a | -r] <data in double quotes>");
                     fflush(stdout);
                     exit(1);
                 }
 
                 if (optind < argcCopy && argvCopy[optind][0] != '-') {
-                    //printf("Found -r flag with argument: %s\n", argvCopy[optind]);
+                    printf("Found -r flag with argument: %s\n", argvCopy[optind]);
                     strncpy(flags->metadata, argvCopy[optind], MAX_LINE_LENGTH);
                     flags->metaDataAdd = true;
                     optind++;
                 } else {
                     printf("Found -r flag without argument\n");
-                    printf("Use: ./password edit <name> [-a | -r] <data in double quotes>");
+                    printf("Use: pass edit <name> [-a | -r] <data in double quotes>");
                     fflush(stdout);
                     exit(1);
                     flags->metadata[0] = '\0';
@@ -276,19 +305,37 @@ int checkFlags(int argc, char *argv[], Flags *flags){
                 break;
 
             case 'i':
-                if(!isFirstArgGrep) {
+                if(action != GREP) {
                     printf("Found -i flag without the grep command\n");
-                    printf("Use: ./password edit <name> [-a | -r] <data in double quotes>");
+                    printf("Use: pass edit <name> [-a | -r] <data in double quotes>");
                     fflush(stdout);
                     exit(1);
                 }
                 flags->i = true;
                 break;
-            case '?':
-                printf("Unknown option: %c\n", optopt);
-                perror("Error when reading flags\n");
+            case 'l':
+                if(action != GEN) {
+                    printf("Found -l flag without the gen command\n");
+                    printf("--> password.exe gen | generate <name> [-m] <metadata> [-c] -l <length> -dsmM \n\t--> generate a password and add it (and add metadata, specify length, specify which types of characters: d - digits, s - special characters, m - miniscules, M - majuscules)\n");
+                }
+ 
+                if (optind < argcCopy && argvCopy[optind][0] != '-') {
+                    //printf("Found -l flag with argument: %s\n", argvCopy[optind]);
+                    if(strlen(argvCopy[optind]) >= INT_LENGTH){
+                        printf("Argument with -l is too long, please enter an integer from 0 to 2^(32)");
+                    }
+                    flags->genLength = atoi(argvCopy[optind]);
+                    optind++;
+                } else {
+                    printf("Found -l flag without argument\n");
+                    printf("--> password.exe gen | generate <name> [-m] <metadata> [-c] -l <length> -dsmM \n\t--> generate a password and add it (and add metadata, specify length, specify which types of characters: d - digits, s - special characters, m - miniscules, M - majuscules)\n");
+                    fflush(stdout);
+                    exit(1);
+                }
+            default:
+                fprintf(stderr, "Invalid option: %s\n", argvCopy[optind]);
+                fprintf(stderr, "Run pass --help for help\n");
                 exit(EXIT_FAILURE);
-                break;
         }
     }
 
@@ -301,30 +348,10 @@ int checkFlags(int argc, char *argv[], Flags *flags){
 }
 
 // MARK: Add
-int addPassword(int argc, char *argv[], int random) {
-    if (argc < 3) {
-        printf("Service name is required\n");
-        return 1;
-    }
-
-    if (argv[2] == NULL) {
-        printf("argv 3 is null\n");
-        return 1;
-    }
-
+int addPassword(char *filePath, int random) {
     if(flags.m && !flags.metaDataAdd){
-        printf("Use: ./password <name> [-m] <data in double quotes>\n");
+        printf("Use: pass <name> [-m] <data in double quotes>\n");
         fflush(stdout);
-        return 1;
-    }
-
-    char *argumentToLowerCase = toLowerCase(argv[2]);
-    char filePath[MAX_PATH];
-    snprintf(filePath, MAX_PATH, "./passwords/%s.txt", argumentToLowerCase);
-
-    struct stat st;
-    if (stat(filePath, &st) == 0) {
-        printf("File already exists\n");
         return 1;
     }
 
@@ -346,8 +373,13 @@ int addPassword(int argc, char *argv[], int random) {
         }
 
         // Use the high-resolution counter value as the seed for the random number generator
-        srand((unsigned int)(counter.QuadPart % UINT_MAX));
-        length = 20 + rand() % 10;  // length gets values between 20 and 30
+        if (flags.genLength == 0){
+            srand((unsigned int)(counter.QuadPart % UINT_MAX));
+            length = 20 + rand() % 10;  // length gets values between 20 and 30
+        }
+        else {
+            length = flags.genLength;
+        }
         key = randomPassword(length);
     } else { 
         // MARK: ADD - Input
@@ -412,78 +444,49 @@ int addPassword(int argc, char *argv[], int random) {
 }
 
 // MARK: Show
-int showPassword(int argc, char *argv[]) {
-    if (argc < 3) {
-        printf("Usage: %s show <name>\n", argv[0]);
-        fflush(stdout);
+int showPassword(char *path) {
+    FILE *file = fopen(path, "r");
+    if (file == NULL) {
+        printf("Error opening file\n");
+        return 1;
+    }
+    char line[MAX_LINE_LENGTH];
+    if (fgets(line, MAX_LINE_LENGTH, file) == NULL) { // Read a single line if it's not empty
+        printf("File is empty\n");
+        fclose(file);
         return 1;
     }
 
-    //Construct the search path
-    char *argumentToLowerCase = toLowerCase(argv[2]);
-    char searchPath[MAX_NAME_LENGTH + 12];
-    sprintf(searchPath, "./passwords/%s.txt", argumentToLowerCase);
-    
-    // Search for the file
-    struct stat st;
-    if (stat(searchPath, &st) != 0) {
-        printf("File not found\n");
-        return 1;
-    }
-    else {
-        FILE *file = fopen(searchPath, "r");
-        if (file == NULL) {
-            printf("Error opening file\n");
-            return 1;
-        }
-        char line[MAX_LINE_LENGTH];
-        if (fgets(line, MAX_LINE_LENGTH, file) == NULL) { // Read a single line if it's not empty
-            printf("File is empty\n");
-            fclose(file);
-            return 1;
-        }
-
-        if(flags.c){
-            if(!strncasecmp(line, "Google", 6)){
-                printf("Google");
-            }
-            else{
-                CopyToClipboard(line);
-            }
+    if(flags.c){
+        if(!strncasecmp(line, "Google", 6)){
+            printf("Google");
         }
         else{
+            CopyToClipboard(line);
+        }
+    }
+    else{
+        printf("%s", line);
+    }
+
+    if(flags.m){
+        while(fgets(line, MAX_LINE_LENGTH, file) != NULL){
             printf("%s", line);
         }
-
-        if(flags.m){
-            while(fgets(line, MAX_LINE_LENGTH, file) != NULL){
-                printf("%s", line);
-            }
-        }
-
-        fclose(file);
     }
+
+    fclose(file);
 
     return 0;
 }
 
 // MARK: Edit
-int editPassword(int argc, char *argv[]){
-    char *argumentToLowerCase = toLowerCase(argv[2]);
-    char searchPath[MAX_NAME_LENGTH + 12];
-    sprintf(searchPath, "./passwords/%s.txt", argumentToLowerCase);
-
-    struct stat st;
+int editPassword(char *filePath, char *argumentToLowerCase) {
     FILE *file;
-    if (stat(searchPath, &st) != 0) { // if file doesn't exist
-        fprintf(stderr, "File not found\n");
-        exit(EXIT_FAILURE);
-    }
-    
     if (!flags.a && !flags.r) {
         const char *command = "vim"; // or "vi"
         char cmd[100];
-        snprintf(cmd, sizeof(cmd), "%s %s", command, searchPath);
+        snprintf(cmd, sizeof(cmd), "%s %s", command, filePath);
 
         // Call Vi/Vim using system()
         if (system(cmd) == -1) {
@@ -492,45 +495,41 @@ int editPassword(int argc, char *argv[]){
         }
     }
     else {
-        file = fopen(searchPath, "a");
+        file = fopen(filePath, "a");
         if (file == NULL) {
             fprintf(stderr, "Error opening the file\n");
             exit(EXIT_FAILURE);
         }
 
         if(flags.r){
-            deleteTextExceptFirstLine(searchPath);
+            deleteTextExceptFirstLine(filePath);
         }
 
         fprintf(file, "%s", flags.metadata);
         fprintf(file, "%s", "\n");
     }
 
-    fclose(file);
+    printf("File '%s' edited successfully.\n", argumentToLowerCase);
 
-    printf("File '%s' edited successfully.\n", argv[2]);
+    fclose(file);
 
     return 0;
 }
 
 // MARK: Delete
-int deletePassword(int argc, char *argv[]) {
-    char *argumentToLowerCase = toLowerCase(argv[2]);
-    char searchPath[MAX_NAME_LENGTH + 12];
-    sprintf(searchPath, "./passwords/%s.txt", argumentToLowerCase);
-
+int deletePassword(char *filePath, char *argumentToLowerCase) {
     if(flags.m){
-        deleteTextExceptFirstLine(searchPath);
+        deleteTextExceptFirstLine(filePath);
 
-        printf("Metadata of '%s' deleted successfully.\n", argv[2]);
+        printf("Metadata of '%s' deleted successfully.\n", argumentToLowerCase);
     }
     else {
-        if (remove(searchPath) != 0) {
+        if (remove(filePath) != 0) {
             perror("Error deleting file");
             return EXIT_FAILURE;
         }
 
-        printf("File '%s' deleted successfully.\n", argv[2]);
+        printf("File '%s' deleted successfully.\n", argumentToLowerCase);
     }
 
     return 0;
@@ -594,7 +593,7 @@ void traverseDirectory(const char *basePath, const char *pattern, bool ignoreCas
             continue;
 
         char path[1024];
-        snprintf(path, sizeof(path), "%s/%s", basePath, dp->d_name);
+        snprintf(path, sizeof(path), "%s\\%s", basePath, dp->d_name);
 
         struct stat statbuf;
         if (stat(path, &statbuf) == -1) {
@@ -682,7 +681,7 @@ int writeToFile(FILE *file, char *key){
 }
 
 // MARK: Random
-char *randomPassword(int len) {
+char *randomPassword(int len) { 
     char characters[33] = "~`!@#$\%^&*()_-+={[}]|\\:;\"'<,>.?/";
     char majuscule[27] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     char miniscule[27] = "abcdefghijklmnopqrstuvwxyz";
@@ -846,7 +845,7 @@ char *findDir(void) {
         perror("getLocationOfExecution");
         exit(EXIT_FAILURE);
     }
-    printf("Executable path: %s\n", locationOfExecution);
+    //printf("Executable path: %s\n", locationOfExecution);
 
     char passwordsFolder[MAX_PATH];
     snprintf(passwordsFolder, sizeof(passwordsFolder), "%s\\passwords", locationOfExecution);
@@ -858,7 +857,7 @@ char *findDir(void) {
         fflush(stdout);
     }
 
-    printf("Password directory: %s\n", passwordsFolder);
+    //printf("Password directory: %s\n", passwordsFolder);
 
     return strdup(passwordsFolder);
 }
@@ -877,7 +876,7 @@ char *constructFilePath(char *passwordsFolder, char *fileName) {
 }
 
 // MARK: Find File
-char *findFile(int argc, char *argv[]){
+char *findFile(int argc, char *argv[], bool checkIfExists) {
     char *passwordsFolder = findDir();
     if (passwordsFolder == NULL) {
         perror("findDir");
@@ -888,10 +887,17 @@ char *findFile(int argc, char *argv[]){
     char *argumentToLowerCase = toLowerCase(argv[2]);
     char *searchPath = constructFilePath(passwordsFolder, argumentToLowerCase);
 
-    // check if file exists
+    // check if file exists 
     struct stat st;
     if (stat(searchPath, &st) != 0) { // if file doesn't exist
-        fprintf(stderr, "FILE NOT FOUND\n");
+        if(checkIfExists){
+            fprintf(stderr, "FILE NOT FOUND\n");
+            fprintf(stderr, "File location: %s\n", searchPath);
+            exit(EXIT_FAILURE);
+        }
+    }
+    else if(!checkIfExists) {
+        fprintf(stderr, "FILE ALREADY EXISTS\n");
         fprintf(stderr, "File location: %s\n", searchPath);
         exit(EXIT_FAILURE);
     }
