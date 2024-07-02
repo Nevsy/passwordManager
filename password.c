@@ -7,6 +7,7 @@
     - Gen: Which characters
     - ...
     - Add: password strength indicator
+    - Overall: recovery codes reader
     - Gen: Cryptographically secure random number
     - ...
     - Encryption?
